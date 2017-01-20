@@ -16,11 +16,11 @@ default: multiboot
 %.o: %.S
 	$(CC) $(CFLAGS) -o $@ -c $<
 
-kernel: $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^
-
-%.strip: %
+%.strip: %.elf
 	strip -o $@ $<
+
+kernel.elf: $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^
 
 multiboot: multiboot.S multiboot.ld kernel.strip
 	$(CC) $(MULTIBOOT_CFLAGS) -T multiboot.ld -o $@ $<
@@ -29,5 +29,7 @@ multiboot: multiboot.S multiboot.ld kernel.strip
 .PHONY: clean
 clean:
 	@rm -f *.elf
+	@rm -f *.strip
 	@rm -f *.o
+	@rm -f multiboot
 
