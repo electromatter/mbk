@@ -1,12 +1,14 @@
 CC=gcc
 LD=ld
-CFLAGS=-g -Wall -Wextra -pedantic -Werror -std=c90
-LDFLAGS=
 
-OBJS=boot.o early.o
+CFLAGS=-fPIE -pie -ffreestanding -nostdlib -g \
+	-Wall -Wextra -pedantic -Werror -std=c99
+MULTIBOOT_CFLAGS=-m32 -ffreestanding -nostdlib -Wall -Wextra -Wextra -pedantic
+
+OBJS=main.o start.o
 
 .PHONY: default
-default: kernel.elf
+default: multiboot
 
 %.o: %.c
 	$(CC) $(CFLAGS) -o $@ -c $<
@@ -14,8 +16,15 @@ default: kernel.elf
 %.o: %.S
 	$(CC) $(CFLAGS) -o $@ -c $<
 
-kernel.elf: linker.ld $(OBJS)
-	$(LD) $(LDFLAGS) -o $@ -T $^
+kernel: $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^
+
+%.strip: %
+	strip -o $@ $<
+
+multiboot: multiboot.S multiboot.ld kernel.strip
+	$(CC) $(MULTIBOOT_CFLAGS) -T multiboot.ld -o $@ $<
+#	strip $@
 
 .PHONY: clean
 clean:
