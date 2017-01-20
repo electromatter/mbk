@@ -8,7 +8,7 @@ MULTIBOOT_CFLAGS=-m32 -ffreestanding -nostdlib -Wall -Wextra -Wextra -pedantic
 OBJS=main.o start.o
 
 .PHONY: default
-default: multiboot
+default: multiboot.strip
 
 %.o: %.c
 	$(CC) $(CFLAGS) -o $@ -c $<
@@ -18,18 +18,19 @@ default: multiboot
 
 %.strip: %.elf
 	strip -o $@ $<
+	chmod -x $@
 
 kernel.elf: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
+	chmod -x $@
 
-multiboot: multiboot.S multiboot.ld kernel.strip
+multiboot.elf: multiboot.S multiboot.ld kernel.strip
 	$(CC) $(MULTIBOOT_CFLAGS) -T multiboot.ld -o $@ $<
-#	strip $@
+	chmod -x $@
 
 .PHONY: clean
 clean:
 	@rm -f *.elf
 	@rm -f *.strip
 	@rm -f *.o
-	@rm -f multiboot
 
