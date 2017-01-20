@@ -1,0 +1,52 @@
+portability?
+amd64
+multiboot
+compiler - language?
+abi
+assembler
+linker
+memory
+scheduler
+disk
+filesystem (vfs)
+syscalls
+migration
+images
+network
+drivers
+acpi
+interrupts
+paravirt kvm and zen
+smp lockless
+ipc
+userspace page tables
+zero copy things
+signals/intrupts
+9p/nbd
+tcp/ip - sctp, tcp, udp, ip, icmp, ipv4, ipv6, dhcp, dns, ntp
+time/date
+linux systemcalls
+posix filesystem
+ramfs
+squashfs
+bitstrings
+structures
+garbage collection
+kernel modules
+elf
+arbitrary executable format
+berkley packet filter
+pid - can do better? i.e. fix races
+fork/clone
+mlock
+userspace
+futex
+polling
+locks/semaphores/events/signals
+vsyscall/vdso
+cache/oom/swap
+address space randomization
+stack guards
+canary values
+strict style
+

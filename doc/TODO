@@ -1,0 +1,23 @@
+math
+crypto
+booting
+long mode
+page allocator
+memory map
+interrupts
+pci
+scsi
+userspace
+systemcalls
+vfs
+filesystems
+signals
+processes
+virtualization
+futex
+pipes
+trace
+profiling
+networking
+drivers
+datastructures - trees, heaps, lists, hashtables, etc...

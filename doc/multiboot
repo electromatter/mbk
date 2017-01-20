@@ -1,0 +1,31 @@
+Multiboot starts the machine in the state:
+
+EAX = 0x2BADBOO2
+EBX = Address of multiboot information structure
+CS = Read/Execute code segment
+DS = ES = FS = GS = SS = Read/Write data segment
+A20 enabled
+CR0 = PG cleared, PE set, others undefined
+EFLAGS = VM cleared, IF cleared, others undefined
+ESP = undefined
+GDTR = undefined
+IDTR = undefined
+
+multiboot header
+linker script
+
+we need to:
+we start in protected mode and we need to get into long mode
+ensure we were multibooted
+ensure we are on a processor that supportes long mode
+setup stack
+setup interrupt tables and global descriptor table
+enable pae
+build page tables
+enable paging
+switch to long mode
+load boot parameters
+detect memory
+detect smp
+
+
