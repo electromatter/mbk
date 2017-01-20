@@ -49,10 +49,6 @@ _start:
 
 	/* enable sse, set gdt, page table, enter long mode */
 
-1:
-	hlt
-	jmp 1b
-
 .Lstart_failed:
 	hlt
 	jmp .Lstart_failed

@@ -1,6 +1,19 @@
 #!/bin/bash
 
-qemu-system-x86_64 -kernel multiboot -nographic -s -S &
-gdb -ix gdb.cfg
+if [ -z "$1" ]; then
+	echo "usage: $0 <multiboot or kernel>"
+	exit 1
+fi
+
+# update the bootable image
+make "$1".strip || exit 1
+
+# start qemu
+qemu-system-x86_64 -kernel "$1".elf -nographic -s -S &
+
+# start gdb front-end
+gdb -ix gdb.cfg "$1".elf
+
+# kill qemu after gdb exits
 kill %1
 

@@ -1,1 +1,0 @@
-decompress lz4 stream and parse elf64 then link and run from there
