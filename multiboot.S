@@ -35,7 +35,6 @@ _start:
 	pushl $0
 	popfl
 
-	/* we are sane enough to use the c elf loader */
 	/*
 	 * Next, we are going to try to enter long mode, but
 	 * first we will do a sanity check to ensure that we
@@ -44,10 +43,40 @@ _start:
 	 */
 
 	call is_sysv_amd64_supported
-	test %eax, %eax
+	testl %eax, %eax
 	jz .Lstart_failed
 
-	/* enable sse, set gdt, page table, enter long mode */
+	/* set GDT */
+	lgdt gdt
+
+	/* disable paging */
+	movl %cr0, %eax
+	andl $~(1 << 31), %eax
+	movl %eax, %cr0
+
+	/* setup page table */
+
+	/* enable pae */
+	movl %cr4, %eax
+	orl $(1 << 5), %eax
+	movl %eax, %cr4
+
+	/* enter long mode (compatability mode) */
+	mov $0xc0000080, %ecx
+        rdmsr
+	orl $(1 << 8), %ecx
+	wrmsr
+
+	/* set task register and gdt register */
+
+	/* enable paging */
+	movl %cr0, %eax
+	orl $((1 << 31) | 1), %eax
+	mov %eax, %cr0
+
+	/* jump into long mode */
+	pushl $_start64
+	lret
 
 .Lstart_failed:
 	hlt
@@ -100,7 +129,6 @@ is_extended_cpuid_available:
 	xorl %eax, %eax
 	popl %ebx
 	ret
-
 
 	/* int is_sysv_amd64_supported(void); */
 is_sysv_amd64_supported:
@@ -180,9 +208,12 @@ is_sysv_amd64_supported:
 	popl %ebx
 	ret
 
+enter_long_mode:
+	ret
+
 .code64
 _start64:
-	.align 16
+	.align 4
 
 	/* we have just entered long mode. now: load the embedded elf */
 
@@ -197,10 +228,52 @@ stack_bottom:
 	.skip 8192
 stack_top:
 
+
+	/* Page table storage */
+pagetable:
+	.skip 8192
+pagetable_end:
+
 .data
+	.align 4
+
+	/* GDT */
+gdt:
+	.word	gdt_end - gdt
+	.long	gdt
+	.word	0
+	.quad	0x0000000000000000	/* NULL descriptor */
+	.quad	0x00af9a000000ffff	/* __KERNEL_CS */
+	.quad	0x00cf92000000ffff	/* __KERNEL_DS */
+	.quad	0x0080890000000000	/* TS descriptor */
+	.quad   0x0000000000000000	/* TS continued */
+gdt_end:
+
 	.align 4096
 _kernel_start:
 	/* include the kernel elf (page aligned) */
 	.incbin "kernel.strip"
 _kernel_end:
+
+	/* registers
+	long mode
+	compatability mode
+
+	aesni
+	general purpose registers
+	rip
+	flags register
+	gdtr
+	idtr
+	ldtr
+	tr
+	control registers
+	debug registers
+	test registers
+	segment registers
+	sse/avx
+	x87
+	amdv
+	vtx
+	*/
 
