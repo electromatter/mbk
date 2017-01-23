@@ -352,379 +352,240 @@ setup_paging:
 	ret
 
 setup_elf:
-	pushl %esi
 	pushl %ebp
 	movl %esp, %ebp
-	xorl %edx, %edx
+	pushl %esi
 
 	leal elf_start, %esi
 
 	/* check that we have a valid header */
 	leal elf_end, %ecx
 	subl %esi, %ecx
-	cmpl $6, %ecx
-	jae 1f
-	pushl $.Lbad_elf_string
-	call die
-1:
+	cmpl $64, %ecx
+	jb .Lbad_elf
 
 	/* check elf magic number */
 	movl (%esi), %eax
 	addl $4, %esi
 	cmpl $0x464c457f, %eax
-	je 1f
-	pushl $.Lbad_elf_string
-	call die
-1:
-
-	/* elf class edx bit 1: 0 for 32 bits or 1 for 64 bits */
-	movzb (%esi), %eax
-	addl $1, %esi
-	decl %eax
+	jne .Lbad_elf
+	/* elf class = 2 specified by ABI */
+	movzb 4(%esi), %eax
+	cmpl $2, %eax
+	jne .Lbad_elf
+	/* elf endian = 1 specified by ABI */
+	movzb 5(%esi), %eax
 	cmpl $1, %eax
-	jbe 1f
-	pushl $.Lbad_elf_string
-	call die
-1:
-	shll $1, %eax
-	orl %eax, %edx
-
-	/* elf endian edx bit 0: 0 for little or 1 for big */
-	movzb (%esi), %eax
-	addl $1, %esi
-	decl %eax
-	cmpl $1, %eax
-	jbe 1f
-	pushl $.Lbad_elf_string
-	call die
-1:
-	orl %eax, %edx
-
-	/* check that we can proceed */
-	testl $2, %edx
-	jz 1f
-	cmpl $64, %ecx
-	jae 2f
-	pushl $.Lbad_elf_string
-	call die
-1:
-	cmpl $52, %ecx
-	jae 2f
-	pushl $.Lbad_elf_string
-	call die
-2:
+	jne .Lbad_elf
 
 	/* elf spec version 1 */
-	movzb (%esi), %eax
+	movzb 6(%esi), %eax
 	addl $1, %esi
 	cmpl $1, %eax
-	je 1f
-	pushl $.Lbad_elf_string
-	call die
-1:
+	jne .Lbad_elf
 
 	/* expect sysv abi (0) */
-	movzb (%esi), %eax
-	addl $1, %esi
+	movzb 7(%esi), %eax
 	cmpl $0, %eax
-	je 1f
-	pushl $.Lbad_elf_string
-	call die
-1:
-
-	/* ignore abi version */
-	addl $8, %esi
+	jne .Lbad_elf
 
 	/* type - executable or shared */
 	xorl %eax, %eax
-	movw (%esi), %ax
-	addl $2, %esi
-	testl $1, %edx
-	jz 1f
-	xchgb %al, %ah
-1:
+	movw 16(%esi), %ax
 	cmpl $2, %eax
-	je 2f
+	je 1f
 	cmpl $3, %eax
-	je 2f
-	pushl $.Lbad_elf_string
-	call die
-2:
+	je 1f
+	jne .Lbad_elf
+1:
 
 	/* for amd64 */
 	xorl %eax, %eax
-	movw (%esi), %ax
-	addl $2, %esi
-	testl $1, %edx
-	jz 1f
-	xchgb %al, %ah
-1:
+	movw 18(%esi), %ax
 	cmpl $0x3e, %eax
-	je 2f
-	pushl $.Lbad_elf_string
-	call die
-2:
+	jne .Lbad_elf
 
 	/* version again, but this time 32-bits */
-	movl (%esi), %eax
-	addl $4, %esi
-	testl $1, %edx
-	jz 1f
-	bswapl %eax
-1:
+	movl 20(%esi), %eax
 	cmpl $1, %eax
-	je 2f
-	pushl $.Lbad_elf_string
-	call die
-2:
+	jne .Lbad_elf
 
-	/* entry */
-	xorl %ecx, %ecx
-	movl (%esi), %eax
-	addl $4, %esi
-	testl $2, %edx
-	jz 1f
-	movl (%esi), %ecx
-	addl $4, %esi
-1:
-	testl $1, %edx
-	jz 2f
-	bswapl %eax
-	bswapl %ecx
-	xchgl %eax, %ecx
-2:
-	pushl %ecx
-	pushl %eax
-
-	/* phoffset */
-	xorl %ecx, %ecx
-	movl (%esi), %eax
-	addl $4, %esi
-	testl $2, %edx
-	jz 1f
-	movl (%esi), %ecx
-	addl $4, %esi
-1:
-	testl $1, %edx
-	jz 2f
-	bswapl %eax
-	bswapl %ecx
-	xchgl %eax, %ecx
-2:
-	pushl %ecx
-	pushl %eax
-
-	/* shoffset (ignored) */
-	testl $2, %edx
-	jz 1f
-	addl $4, %esi
-1:
-	addl $4, %esi
-
-	/* flags = 0 */
-	movl (%esi), %eax
-	addl $4, %esi
-	testl $1, %edx
-	jz 1f
-	bswapl %eax
-1:
-	cmpl $0, %eax
-	je 2f
-	pushl $.Lbad_elf_string
-	call die
-2:
-
-	/* header size */
-	xorl %eax, %eax
-	movw (%esi), %ax
-	addl $2, %esi
-	testl $1, %edx
-	jz 1f
-	xchgb %al, %ah
-1:
-	testl $2, %edx
-	jnz 2f
-	cmpl $52, %eax
-	jae 3f
-	pushl $.Lbad_elf_string
-	call die
-2:
-	cmpl $64, %eax
-	jae 3f
-	pushl $.Lbad_elf_string
-	call die
-3:
+	/* flags */
+	movl 48(%esi), %eax
+	testl %eax, %eax
+	jnz .Lbad_elf
 
 	/* phentsize */
 	xorl %eax, %eax
-	movw (%esi), %ax
-	addl $2, %esi
-	testl $1, %edx
-	jz 1f
-	xchgb %al, %ah
-1:
+	movw 16(%esi), %ax
+	cmpl $56, %eax
+	jne 1f
+
+	/* entry point */
+	movl 24(%esi), %eax
+	pushl %eax
+	movl 28(%esi), %eax
 	pushl %eax
 
-	/* make sure phentsize makes sense */
-	test $2, %edx
-	jz 1f
-	cmpl $56, %eax
-	je 2f
-	pushl $.Lbad_elf_string
-	call die
-1:
-	cmpl $32, %eax
-	je 2f
-	pushl $.Lbad_elf_string
-	call die
-2:
+	/* phoff */
+	movl 32(%esi), %edx
+	movl %eax, 8(%esp)
+	addl $elf_start, %edx
+	cmpl $elf_end, %edx
+	jbe .Lbad_elf
+	movl 36(%esi), %eax
+	testl %eax, %eax
+	jnz .Lbad_elf
 
 	/* phnum */
 	xorl %eax, %eax
-	movw (%esi), %ax
-	addl $2, %esi
-	testl $1, %edx
-	jz 1f
-	xchgb %al, %ah
-1:
+	movw 56(%esi), %ax
+
+	/* phnum */
 	pushl %eax
-
+	/* ph pointer */
 	pushl %edx
-	pushl $elf_end - elf_start
-	pushl $elf_start
+	call map_program
+	addl $16, %esp
 
-	/*
-	 * Here the stack looks like:
-	 *  pushq entry
-	 *  pushq phoffset
-	 *  pushl phentsize
-	 *  pushl phnum
-	 *  pushl %edx (bit 1 for 64 bit elf header, bit 0 for big endian)
-	 *  pushl (size of elf)
-	 *  pushl (elf base)
-	 */
-	call map_elf
+	/* return the entry point */
+	popl %eax
+	popl %edx
 
-	/* return entry */
-	movl 28(%esp), %eax
-	movl 32(%esp), %edx
 	popl %esi
 	popl %ebp
 	ret
 
+.Lbad_elf:
+	pushl $.Lbad_elf_string
+	call die
 .Lbad_elf_string:
 	.string "Invalid ELF!"
 
-map_elf:
+map_program:
 	pushl %ebp
 	movl %esp, %ebp
-	pushl %esi
-	pushl %edi
 	pushl %ebx
-
-	/* load phoffset */
-	movl 32(%ebp), %esi
-	testl %esi, %esi
-	jz 1f
-	pushl $.Lbad_elf_string
-	call die
-1:
-
-	/* load type */
-	movl 16(%ebp), %edx
-	/* elf size */
-	movl 12(%ebp), %edi
-	/* elf base */
-	movl 8(%ebp), %eax
-	/* count (phnum) */
-	movl 20(%ebp), %ebx
-	/* load phentsize */
-	movl 24(%ebp), %ebp
-	/* start pointer */
-	addl %eax, %esi
-	/* end pointer */
-	addl %eax, %edi
-
-	testl %ebx, %ebx
-	jnz 2f
-	pushl $.Lbad_elf_string
-	call die
-
-2:
-	movl %esi, %eax
-	addl %ebp, %esi
-	cmpl %esi, %edi
-	jae 3f
-	pushl $.Lbad_elf_string
-	call die
-3:
-
-	/* edx */
-	movl 28(%esp), %ecx
-	movl %ecx, -4(%esp)
-	/* elf size */
-	movl 24(%esp), %ecx
-	movl %ecx, -8(%esp)
-	/* elf base */
-	movl 20(%esp), %ecx
-	movl %ecx, -12(%esp)
-	/* program header */
-	movl %eax, -16(%esp)
-	subl $16, %esp
-
-	call map_section
-
-	addl 16, %esp
-	decl %ebx
-	jnz 2b
-
-	addl $16, %esp
-	popl %ebx
-	popl %edi
-	popl %esi
-	popl %ebp
-	ret
-
-map_section:
-	pushl %ebp
-	movl %esp, %ebp
 	pushl %esi
-	pushl %ebx
 
-	/* edx (bit 1 for 64 bit pointers, bit 0 for big endian) */
-	movl 20(%ebp), %edx
+	subl $4, %esp
 
-	/* elf size (maximum offset) */
-	movl 16(%ebp), %ecx
-
-	/* elf base */
+	/* phnum */
 	movl 12(%ebp), %ebx
-
-	/* section header */
+	/* ph pointer */
 	movl 8(%ebp), %esi
 
-	/* map the section described by the section header */
-	nop
+	/* check that we can do the loop */
+	testl %ebx, %ebx
+	jz .Lbad_elf
 
-	popl %ebx
+1:
+	/* pass the parameters */
+	movl %esi, (%esp)
+	addl $56, %esi
+	cmpl $elf_end, %esi
+	ja .Lbad_elf
+	call map_program_section
+	decl %ebx
+	jnz 1b
+
 	popl %esi
+	popl %ebx
 	popl %ebp
 	ret
 
-setup_gdt:
+map_program_section:
 	pushl %ebp
 	movl %esp, %ebp
 
-	/* load the gdt so we can jump to long mode */
-	lgdtl (gdt_pointer)
+	/* header pointer */
+	movl 8(%ebp), %ecx
 
-	/* select the correct segments */
-	movl $gdt_data, %eax
-	movw %ax, %ds
-	movw %ax, %es
-	movw %ax, %ss
-	movw %ax, %fs
-	movw %ax, %gs
+#define PT_LOAD		1
+#define PT_DYNAMIC	2
+#define PT_INTREP	3
+
+	movl (%ecx), %eax
+	cmpl $PT_LOAD, %eax
+	je .Lload_section
+	cmpl $PT_DYNAMIC, %eax
+	je .Lelf_was_dynamic
+	cmpl $PT_INTREP, %eax
+	je .Lelf_was_dynamic
+	jmp .Lignore_section
+
+.Lload_section:
+
+#define PF_X		1
+#define PF_W		2
+#define PF_R		4
+
+	/* alignment */
+	movl 48(%ecx), %eax
+	testl 0xfff, %eax
+	jnz .Lelf_bad_alignment
+
+	/* flags */
+	movl 4(%ecx), %eax
+
+	/* filesz */
+	movl 32(%ecx), %eax
+	movl 36(%ecx), %edx
+	testl %edx, %edx
+	jnz .Lbad_elf
+	pushl %eax
+
+	/* offset */
+	movl 8(%ecx), %eax
+	movl 12(%ecx), %edx
+	testl %edx, %edx
+	jnz .Lbad_elf
+	pushl %eax
+
+	/* memsz */
+	movl 40(%ecx), %eax
+	movl 44(%ecx), %edx
+	pushl %edx
+	pushl %eax
+
+	/* vaddr */
+	movl 16(%ecx), %eax
+	movl 20(%ecx), %edx
+	pushl %edx
+	pushl %eax
+
+	call mmap_elf
+
+	addl $24, %esp
+
+.Lignore_section:
+	popl %ebp
+	ret
+
+.Lelf_bad_alignment:
+	pushl $1f
+	call die
+1:
+	.string "ELF program section not aligned to page cannot map!"
+
+.Lelf_was_dynamic:
+	pushl $1f
+	call die
+1:
+	.string "ELF must not be dynamic!"
+
+
+	/*
+	 * void mmap_elf(long long vaddr,
+	 *		 long long memsz,
+	 *		 int offset,
+	 *		 int filesz);
+	 */
+mmap_elf:
+	pushl %ebp
+	movl %esp, %ebp
+
+	/* TODO mmap */
 
 	popl %ebp
 	ret
