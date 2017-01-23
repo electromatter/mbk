@@ -110,7 +110,13 @@ _start:
 	/* setup the environment */
 	call check_cpuid
 	call setup_paging
+
 	call setup_elf
+
+	/* save the entry point for enter_long_mode */
+	pushl %edx
+	pushl %eax
+
 	call setup_gdt
 
 	pushl $.Lok_string
@@ -663,9 +669,26 @@ map_elf:
 map_section:
 	pushl %ebp
 	movl %esp, %ebp
+	pushl %esi
+	pushl %ebx
 
+	/* edx (bit 1 for 64 bit pointers, bit 0 for big endian) */
+	movl 20(%ebp), %edx
+
+	/* elf size (maximum offset) */
+	movl 16(%ebp), %ecx
+
+	/* elf base */
+	movl 12(%ebp), %ebx
+
+	/* section header */
+	movl 8(%ebp), %esi
+
+	/* map the section described by the section header */
 	nop
 
+	popl %ebx
+	popl %esi
 	popl %ebp
 	ret
 
@@ -702,6 +725,8 @@ enter_long_mode:
 	/* _start(magic, multiboot); */
 	movl $LONG_MODE_MAGIC, %edi
 	movl multiboot_pointer, %esi
+	/*movl map, %edx*/
+	lea 8(%ebp), %ecx
 	lret
 
 	popl %ebp
@@ -1019,6 +1044,25 @@ memset:
 .code64
 long_mode_trampoline:
 1:
+	xorq %rax, %rax
+	movl %edi, %eax
+	movq %rax, %rdi
+
+	xorq %rax, %rax
+	movl %esi, %eax
+	movq %rax, %rsi
+
+	xorq %rax, %rax
+	movl %edx, %eax
+	movq %rax, %rdx
+
+	xorq %rsp, %rsp
+	xorq %rbp, %rbp
+
+	xorq %rax, %rax
+	movl %ecx, %eax
+	jmp *%rax
+
 	hlt
 	jmp 1b
 
