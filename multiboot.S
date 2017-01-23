@@ -17,9 +17,24 @@ screen_pointer:
 	.long 0
 multiboot_pointer:
 	.long 0
+
 gdt_pointer:
 	.word gdt_end - gdt - 1
 	.long gdt
+
+map:
+	/* gdt */
+	.quad gdt
+	.quad gdt_end - gdt
+	/* page table */
+	.quad table
+	.quad table_size
+	/* kernel elf */
+	.quad elf
+	.quad elf_end - elf
+	/* reserved */
+	.quad 0
+	.quad 0
 
 gdt:
 	/* null segment */
@@ -65,11 +80,10 @@ gdt:
 gdt_end:
 
 .bss
-.align 16
-	.skip 128
+.align 4096
+	.skip 4096
 stack:
 
-.section .page_table
 	/* page table for 2m pages for the entire 4g space */
 .align 4096
 table_root:
@@ -725,8 +739,8 @@ enter_long_mode:
 	/* _start(magic, multiboot); */
 	movl $LONG_MODE_MAGIC, %edi
 	movl multiboot_pointer, %esi
-	/*movl map, %edx*/
-	lea 8(%ebp), %ecx
+	leal map, %edx
+	leal 8(%ebp), %ecx
 	lret
 
 	popl %ebp
