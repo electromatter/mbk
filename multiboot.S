@@ -516,10 +516,6 @@ map_program_section:
 
 .Lload_section:
 
-#define PF_X		1
-#define PF_W		2
-#define PF_R		4
-
 	/* alignment */
 	movl 48(%ecx), %eax
 	testl 0xfff, %eax
@@ -527,6 +523,7 @@ map_program_section:
 
 	/* flags */
 	movl 4(%ecx), %eax
+	pushl %eax
 
 	/* filesz */
 	movl 32(%ecx), %eax
@@ -579,11 +576,16 @@ map_program_section:
 	 * void mmap_elf(long long vaddr,
 	 *		 long long memsz,
 	 *		 int offset,
-	 *		 int filesz);
+	 *		 int filesz,
+	 *		 int flags);
 	 */
 mmap_elf:
 	pushl %ebp
 	movl %esp, %ebp
+
+#define PF_X		1
+#define PF_W		2
+#define PF_R		4
 
 	/* TODO mmap */
 
