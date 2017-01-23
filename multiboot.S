@@ -6,13 +6,13 @@
 .section .multiboot
 	/* multiboot header */
 	jmp _start
-	.align 16
+.align 16
 	.long MULTIBOOT_MAGIC
 	.long MULTIBOOT_FLAGS
 	.long -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
 
 .data
-.align 16
+.align 8
 screen_pointer:
 	.long 0
 multiboot_pointer:
@@ -24,14 +24,17 @@ gdt_pointer:
 
 map:
 	/* gdt */
-	.quad gdt
+	.long gdt
+	.long 0
 	.quad gdt_end - gdt
 	/* page table */
-	.quad table
+	.long table_root
+	.long 0
 	.quad table_size
 	/* kernel elf */
-	.quad elf
-	.quad elf_end - elf
+	.long elf_start
+	.long 0
+	.quad elf_end - elf_start
 	/* reserved */
 	.quad 0
 	.quad 0
@@ -81,8 +84,10 @@ gdt_end:
 
 .bss
 .align 4096
-	.skip 4096
+stack_base:
+	.skip 128
 stack:
+
 
 	/* page table for 2m pages for the entire 4g space */
 .align 4096
