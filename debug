@@ -9,7 +9,7 @@ fi
 make "$1".strip || exit 1
 
 # start qemu
-qemu-system-x86_64 -kernel "$1".elf -display none -s -S &
+qemu-system-x86_64 -kernel "$1".elf -s -S &
 
 # start gdb front-end
 gdb -ix gdb.cfg "$1".elf

@@ -1,279 +1,1030 @@
 #define MULTIBOOT_MAGIC	(0x1badb002)
+#define MULTIBOOT_EAX_MAGIC (0x2badb002)
+#define LONG_MODE_MAGIC (0x3badb002)
 #define MULTIBOOT_FLAGS	(3)
 
 .section .multiboot
 	/* multiboot header */
 	jmp _start
-	.align 4
+	.align 16
 	.long MULTIBOOT_MAGIC
 	.long MULTIBOOT_FLAGS
 	.long -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
 
+.data
+.align 16
+screen_pointer:
+	.long 0
+multiboot_pointer:
+	.long 0
+gdt_pointer:
+	.word gdt_end - gdt - 1
+	.long gdt
+
+gdt:
+	/* null segment */
+	.quad 0
+
+	/*
+	 * code segment:
+	 *  - Granuality (bit 23) - limit in units of 4k pages
+	 *  - Default Operand Mode (bit 22) - for 32 bit default
+	 *  - Long mode (bit 21)
+	 *  - Present (bit 15)
+	 *  - Must be one (bits 12:11)
+	 *  - Readable (bit 9)
+	 *  - Segment Limit (bits 19:16 and lower 16 bits)
+	 */
+.set gdt_code, . - gdt
+	.quad ( \
+	( \
+		( \
+		  (1 << 23) | (1 << 22) | (1 << 21) | (0xf << 16) \
+		| (1 << 15) | (3 << 11) | (1 << 9) \
+		) << 32 \
+	) | 0xffff)
+
+	/*
+	 * data segment:
+	 *  - Granuality (bit 23) - limit in units of 4k pages
+	 *  - Default Operand Mode (bit 22) - for 32 bit default
+	 *  - Long mode (bit 21)
+	 *  - Present (bit 15)
+	 *  - Must be one (bits 12:11)
+	 *  - Readable (bit 9)
+	 *  - Segment Limit (bits 19:16 and lower 16 bits)
+	 */
+.set gdt_data, . - gdt
+	.quad ( \
+	( \
+		( \
+		  (1 << 23) | (1 << 22) | (0xf << 16) \
+		| (1 << 15) | (1 << 12) | (1 << 9) \
+		) << 32 \
+	) | 0xffff)
+gdt_end:
+
+.bss
+.align 16
+	.skip 128
+stack:
+
+.section .page_table
+	/* page table for 2m pages for the entire 4g space */
+.align 4096
+table_root:
+	.skip 4096
+table_1g:
+	.skip 4096
+table_2m:
+	.skip 4*4096
+.set table_size, . - table_root
+
 .globl _start
 .text
 .code32
+.align 16
 _start:
-	/*
-	 * We are left in protected mode by the bootloader.
-	 * Next, we need to enter long mode.
-	 *
-	 * multiboot specifies that at this point:
-	 *  - A20 is enabled
-	 *  - %eax := 0x2badb002
-	 *  - %ebx := address of the multiboot information structure
-	 *  - cr0: PG cleared and PE set, rest undefined
-	 *  - flags: VM and IF cleared, rest undefined
-	 *  - All other registers are undefined (including esp, gdt, idt)
-	 */
-
-	/* ensure we were booted with a multiboot bootloader */
-	cmpl $0x2badb002, %eax
-	jne .Lstart_failed
-
-	/* setup a stack, and try to get the flags in a sane state (cleared) */
-	mov $stack_top, %esp
+	/* clear the flags and setup the stack */
+	cli
+	cld
+	movl $stack, %esp
+	xorl %ebp, %ebp
+	push %ebp
+	push %ebp
+	movl %esp, %ebp
 	pushl $0
 	popfl
 
-	/*
-	 * Next, we are going to try to enter long mode, but
-	 * first we will do a sanity check to ensure that we
-	 * are infact running on a processor that supports the
-	 * System V amd64 ABI.
-	 */
+	pushl %eax
+	call clear_screen
 
-	call is_sysv_amd64_supported
-	testl %eax, %eax
-	jz .Lstart_failed
+	pushl $.Learly_string
+	call puts
+	addl $4, %esp
 
-	/* set GDT */
-	lgdt gdt
+	/* eax preserved for multiboot check */
+	popl %eax
+	call check_multiboot
 
-	/* disable paging */
-	movl %cr0, %eax
-	andl $~(1 << 31), %eax
-	movl %eax, %cr0
+	/* setup the environment */
+	call check_cpuid
+	call setup_paging
+	call setup_elf
+	call setup_gdt
 
-	/* setup page table */
+	pushl $.Lok_string
+	call puts
+	addl $4, %esp
 
-	/* enable pae */
-	movl %cr4, %eax
-	orl $(1 << 5), %eax
-	movl %eax, %cr4
+	/* enter long mode */
+	call enter_long_mode
 
-	/* enter long mode (compatability mode) */
-	mov $0xc0000080, %ecx
-        rdmsr
-	orl $(1 << 8), %ecx
-	wrmsr
+	pushl $.Ljump_failed_string
+	call die
 
-	/* set task register and gdt register */
+.Learly_string:
+	.string "Reached early boot trampoline...\n"
+.Lok_string:
+	.string "Mapped target elf. Entering long mode...\n"
+.Ljump_failed_string:
+	.string "Failed to enter long mode!\n"
 
-	/* enable paging */
-	movl %cr0, %eax
-	orl $((1 << 31) | 1), %eax
-	mov %eax, %cr0
+check_multiboot:
+	pushl %ebp
+	movl %esp, %ebp
 
-	/* jump into long mode */
-	pushl $_start64
-	lret
+	/* check for the multiboot magic number */
+	cmpl $MULTIBOOT_EAX_MAGIC, %eax
+	jz 1f
+	pushl $.Lmultiboot_fail_string
+	call die
+1:
 
-.Lstart_failed:
-	hlt
-	jmp .Lstart_failed
+	/* save the multiboot info pointer */
+	movl %ebx, multiboot_pointer
 
-	/* int is_extended_cpuid_available(void); */
-is_extended_cpuid_available:
-	/* save ebx since it is trashed by cpuid */
+	popl %ebp
+	ret
+
+.Lmultiboot_fail_string:
+	.string "Bootloader is not multiboot complient!"
+
+/*
+ * Required CPU features:
+ *   fpu, tsc, cx8, cmov, mmx, sse, sse2, fxsr, pae, pse, msr, pge, pat,
+ *   clflush, lm
+ */
+
+#define CPUID_FPU		(1 << 0)
+#define CPUID_PSE		(1 << 3)
+#define CPUID_TSC		(1 << 4)
+#define CPUID_MSR		(1 << 5)
+#define CPUID_PAE		(1 << 6)
+#define CPUID_CX8		(1 << 8)
+#define CPUID_PGE		(1 << 13)
+#define CPUID_CMOV		(1 << 15)
+#define CPUID_PAT		(1 << 16)
+#define CPUID_CLFLUSH		(1 << 19)
+#define CPUID_MMX		(1 << 23)
+#define CPUID_FXSR		(1 << 24)
+#define CPUID_SSE		(1 << 25)
+#define CPUID_SSE2		(1 << 26)
+#define CPUID_NX		(1 << 20)
+#define CPUID_LM		(1 << 29)
+
+#define BASIC_CPUID_FEATURES	( CPUID_FPU	\
+				| CPUID_PSE	\
+				| CPUID_TSC	\
+				| CPUID_MSR	\
+				| CPUID_PAE	\
+				| CPUID_CX8	\
+				| CPUID_PGE	\
+				| CPUID_CMOV	\
+				| CPUID_PAT	\
+				| CPUID_CLFLUSH	\
+				| CPUID_MMX	\
+				| CPUID_FXSR	\
+				| CPUID_SSE	\
+				| CPUID_SSE2	\
+				)
+
+/* long mode */
+#define EXTENDED_CPUID_FEATURES (CPUID_NX | CPUID_LM)
+
+check_cpuid:
+	pushl %ebp
+	movl %esp, %ebp
 	pushl %ebx
 
-	/* load the flags register into eax */
+	/* try to see if we can flip the cpuid bit in flags */
 	pushfl
 	popl %eax
-
-	/* save it for comparison in ecx */
 	movl %eax, %ecx
-
-	/* try and flip the cpuid bit and store into the flags register */
 	xorl $(1 << 21), %eax
 	pushl %eax
 	popfl
-
-	/* load the resulting flags register */
 	pushfl
 	popl %eax
-
-	/* if the cpuid bit was unchanged, then we can't use cpuid! */
 	cmpl %eax, %ecx
-	je .Lno_cpuid
-
-	/* check basic cpuid */
-	xorl %eax, %eax
-	cpuid
-	cmpl $0x1, %eax
-	jb .Lno_cpuid
-
-	/* check extended cpuid */
-	movl $0x80000000, %eax
-	cpuid
-	cmpl $0x80000001, %eax
-	jb .Lno_cpuid
-
-	/* extended cpuid supported return eax=1 */
-	movl $1, %eax
-	popl %ebx
-	ret
-
-.Lno_cpuid:
-	/* extended cpuid not supported return eax=0 */
-	xorl %eax, %eax
-	popl %ebx
-	ret
-
-	/* int is_sysv_amd64_supported(void); */
-is_sysv_amd64_supported:
-	/*
-	 * The System V AMD64 ABI requires the following features:
-	 *  - fpu
-	 *  - tsc
-	 *  - cx8
-	 *  - cmov
-	 *  - mmx
-	 *  - sse
-	 *  - sse2
-	 *  - fxsr
-	 *  - syscall
-	 *  - pae
-	 *  - pse
-	 *  - msr
-	 *  - pge
-	 *  - pat
-	 *  - clflush
-	 */
-
-	/* save ebx since it is trashed by cpuid */
-	pushl %ebx
-
-	/* check that we can use extended cpuid */
-	call is_extended_cpuid_available
-	testl %eax, %eax
-	jnz 1f
-	popl %ebx
-	ret
-
+	jne 1f
+	pushl $.Lno_cpuid_string
+	call die
 1:
-	/*
-	 * First check for the following features using basic cpuid:
-	 * - fpu  bit 0
-	 * - tsc  bit 4
-	 * - cx8  bit 8
-	 * - cmov bit 15
-	 * - mmx  bit 23
-	 * - sse  bit 25
-	 * - sse2 bit 26
-	 * - fxsr bit 24
-	 * - pae  bit 6
-	 * - pse  bit 3
-	 * - msr  bit 5
-	 * - pge  bit 13
-	 * - pat  bit 16
-	 * - clflush bit 19
-	 */
+
+	/* check the cpuid support */
+	xorl %eax, %eax
+	cpuid
+	cmpl $1, %eax
+	jae 1f
+	pushl $.Lno_cpuid_string
+	call die
+1:
+
+	/* check extended cpuid support */
+	movl $(1 << 31), %eax
+	cpuid
+	cmpl $((1 << 31) | 1), %eax
+	jae 1f
+	pushl $.Lno_cpuid_string
+	call die
+1:
+
+	/* check cpu features */
 	movl $1, %eax
 	cpuid
-#define BASIC_CPUID_FEATURES 0x789a179
 	andl $BASIC_CPUID_FEATURES, %edx
 	cmpl $BASIC_CPUID_FEATURES, %edx
-	jne .Lno_long_mode
+	je 1f
+	pushl $.Lno_long_mode_string
+	call die
+1:
 
-	/*
-	 * Next check for the following features using extended cpuid:
-	 * - lm bit 29
-	 */
-	movl $0x80000001, %eax
+	/* check extended features */
+	movl $((1 << 31) | 1), %eax
 	cpuid
-#define EXTENDED_CPUID_FEATURES 0x20000000
 	andl $EXTENDED_CPUID_FEATURES, %edx
 	cmpl $EXTENDED_CPUID_FEATURES, %edx
-	jne .Lno_long_mode
+	je 1f
+	pushl $.Lno_long_mode_string
+	call die
+1:
 
-	/* cpuid reports our processor supports all the required features */
-	movl $1, %eax
 	popl %ebx
+	popl %ebp
 	ret
 
-.Lno_long_mode:
-	/* some feature is missing return eax=0 */
+.Lno_cpuid_string:
+	.string "CPUID is not supported on this processor!"
+
+.Lno_long_mode_string:
+	.string "This CPU does not support the SYSV amd64 ABI!"
+
+setup_paging:
+	pushl %ebp
+	movl %esp, %ebp
+
+	/* zero out the page table */
+	pushl $table_size
+	pushl $0
+	pushl $table_root
+	call memset
+	addl $12, %esp
+
+	/* link in the 1g table */
+	leal table_1g + 3, %eax
+	movl %eax, table_root
+
+	/* link in the 2m tables */
+	leal table_2m + 3, %eax
+	movl %eax, table_1g
+	leal 0x1000 + table_2m + 3, %eax
+	movl %eax, 8 + table_1g
+	leal 0x2000 + table_2m + 3, %eax
+	movl %eax, 16 + table_1g
+	leal 0x3000 + table_2m + 3, %eax
+	movl %eax, 24 + table_1g
+
+	/* identity map the 2m pages */
+	movl $512*4, %ecx
+	movl $0x83, %eax
+	leal table_2m, %edx
+1:
+	movl %eax, (%edx)
+	addl $0x200000, %eax
+	addl $8, %edx
+	decl %ecx
+	jnz 1b
+
+#define CR0_PG		(1 << 31)
+#define CR0_PE		(1)
+#define CR4_PAE		(1 << 5)
+#define EFER_LM		(1 << 8)
+#define EFER_NX		(1 << 11)
+#define MSR_EFER	(0xc0000080)
+
+	/* load the page table */
+	leal table_root, %eax
+	movl %eax, %cr3
+
+	/* enable paging */
+	movl %cr4, %eax
+	orl $CR4_PAE, %eax
+	movl %eax, %cr4
+
+	/* enable long mode */
+	movl $MSR_EFER, %ecx
+	rdmsr
+	orl $EFER_LM | EFER_NX, %eax
+	wrmsr
+
+	/* enable page protected mode */
+	movl %cr0, %eax
+	orl $CR0_PG | CR0_PE, %eax
+	movl %eax, %cr0
+
+	popl %ebp
+	ret
+
+setup_elf:
+	pushl %esi
+	pushl %ebp
+	movl %esp, %ebp
+	xorl %edx, %edx
+
+	leal elf_start, %esi
+
+	/* check that we have a valid header */
+	leal elf_end, %ecx
+	subl %esi, %ecx
+	cmpl $6, %ecx
+	jae 1f
+	pushl $.Lbad_elf_string
+	call die
+1:
+
+	/* check elf magic number */
+	movl (%esi), %eax
+	addl $4, %esi
+	cmpl $0x464c457f, %eax
+	je 1f
+	pushl $.Lbad_elf_string
+	call die
+1:
+
+	/* elf class edx bit 1: 0 for 32 bits or 1 for 64 bits */
+	movzb (%esi), %eax
+	addl $1, %esi
+	decl %eax
+	cmpl $1, %eax
+	jbe 1f
+	pushl $.Lbad_elf_string
+	call die
+1:
+	shll $1, %eax
+	orl %eax, %edx
+
+	/* elf endian edx bit 0: 0 for little or 1 for big */
+	movzb (%esi), %eax
+	addl $1, %esi
+	decl %eax
+	cmpl $1, %eax
+	jbe 1f
+	pushl $.Lbad_elf_string
+	call die
+1:
+	orl %eax, %edx
+
+	/* check that we can proceed */
+	testl $2, %edx
+	jz 1f
+	cmpl $64, %ecx
+	jae 2f
+	pushl $.Lbad_elf_string
+	call die
+1:
+	cmpl $52, %ecx
+	jae 2f
+	pushl $.Lbad_elf_string
+	call die
+2:
+
+	/* elf spec version 1 */
+	movzb (%esi), %eax
+	addl $1, %esi
+	cmpl $1, %eax
+	je 1f
+	pushl $.Lbad_elf_string
+	call die
+1:
+
+	/* expect sysv abi (0) */
+	movzb (%esi), %eax
+	addl $1, %esi
+	cmpl $0, %eax
+	je 1f
+	pushl $.Lbad_elf_string
+	call die
+1:
+
+	/* ignore abi version */
+	addl $8, %esi
+
+	/* type - executable or shared */
 	xorl %eax, %eax
+	movw (%esi), %ax
+	addl $2, %esi
+	testl $1, %edx
+	jz 1f
+	xchgb %al, %ah
+1:
+	cmpl $2, %eax
+	je 2f
+	cmpl $3, %eax
+	je 2f
+	pushl $.Lbad_elf_string
+	call die
+2:
+
+	/* for amd64 */
+	xorl %eax, %eax
+	movw (%esi), %ax
+	addl $2, %esi
+	testl $1, %edx
+	jz 1f
+	xchgb %al, %ah
+1:
+	cmpl $0x3e, %eax
+	je 2f
+	pushl $.Lbad_elf_string
+	call die
+2:
+
+	/* version again, but this time 32-bits */
+	movl (%esi), %eax
+	addl $4, %esi
+	testl $1, %edx
+	jz 1f
+	bswapl %eax
+1:
+	cmpl $1, %eax
+	je 2f
+	pushl $.Lbad_elf_string
+	call die
+2:
+
+	/* entry */
+	xorl %ecx, %ecx
+	movl (%esi), %eax
+	addl $4, %esi
+	testl $2, %edx
+	jz 1f
+	movl (%esi), %ecx
+	addl $4, %esi
+1:
+	testl $1, %edx
+	jz 2f
+	bswapl %eax
+	bswapl %ecx
+	xchgl %eax, %ecx
+2:
+	pushl %ecx
+	pushl %eax
+
+	/* phoffset */
+	xorl %ecx, %ecx
+	movl (%esi), %eax
+	addl $4, %esi
+	testl $2, %edx
+	jz 1f
+	movl (%esi), %ecx
+	addl $4, %esi
+1:
+	testl $1, %edx
+	jz 2f
+	bswapl %eax
+	bswapl %ecx
+	xchgl %eax, %ecx
+2:
+	pushl %ecx
+	pushl %eax
+
+	/* shoffset (ignored) */
+	testl $2, %edx
+	jz 1f
+	addl $4, %esi
+1:
+	addl $4, %esi
+
+	/* flags = 0 */
+	movl (%esi), %eax
+	addl $4, %esi
+	testl $1, %edx
+	jz 1f
+	bswapl %eax
+1:
+	cmpl $0, %eax
+	je 2f
+	pushl $.Lbad_elf_string
+	call die
+2:
+
+	/* header size */
+	xorl %eax, %eax
+	movw (%esi), %ax
+	addl $2, %esi
+	testl $1, %edx
+	jz 1f
+	xchgb %al, %ah
+1:
+	testl $2, %edx
+	jnz 2f
+	cmpl $52, %eax
+	jae 3f
+	pushl $.Lbad_elf_string
+	call die
+2:
+	cmpl $64, %eax
+	jae 3f
+	pushl $.Lbad_elf_string
+	call die
+3:
+
+	/* phentsize */
+	xorl %eax, %eax
+	movw (%esi), %ax
+	addl $2, %esi
+	testl $1, %edx
+	jz 1f
+	xchgb %al, %ah
+1:
+	pushl %eax
+
+	/* make sure phentsize makes sense */
+	test $2, %edx
+	jz 1f
+	cmpl $56, %eax
+	je 2f
+	pushl $.Lbad_elf_string
+	call die
+1:
+	cmpl $32, %eax
+	je 2f
+	pushl $.Lbad_elf_string
+	call die
+2:
+
+	/* phnum */
+	xorl %eax, %eax
+	movw (%esi), %ax
+	addl $2, %esi
+	testl $1, %edx
+	jz 1f
+	xchgb %al, %ah
+1:
+	pushl %eax
+
+	pushl %edx
+	pushl $elf_end - elf_start
+	pushl $elf_start
+
+	/*
+	 * Here the stack looks like:
+	 *  pushq entry
+	 *  pushq phoffset
+	 *  pushl phentsize
+	 *  pushl phnum
+	 *  pushl %edx (bit 1 for 64 bit elf header, bit 0 for big endian)
+	 *  pushl (size of elf)
+	 *  pushl (elf base)
+	 */
+	call map_elf
+
+	/* return entry */
+	movl 28(%esp), %eax
+	movl 32(%esp), %edx
+	popl %esi
+	popl %ebp
+	ret
+
+.Lbad_elf_string:
+	.string "Invalid ELF!"
+
+map_elf:
+	pushl %ebp
+	movl %esp, %ebp
+	pushl %esi
+	pushl %edi
+	pushl %ebx
+
+	/* load phoffset */
+	movl 32(%ebp), %esi
+	testl %esi, %esi
+	jz 1f
+	pushl $.Lbad_elf_string
+	call die
+1:
+
+	/* load type */
+	movl 16(%ebp), %edx
+	/* elf size */
+	movl 12(%ebp), %edi
+	/* elf base */
+	movl 8(%ebp), %eax
+	/* count (phnum) */
+	movl 20(%ebp), %ebx
+	/* load phentsize */
+	movl 24(%ebp), %ebp
+	/* start pointer */
+	addl %eax, %esi
+	/* end pointer */
+	addl %eax, %edi
+
+	testl %ebx, %ebx
+	jnz 2f
+	pushl $.Lbad_elf_string
+	call die
+
+2:
+	movl %esi, %eax
+	addl %ebp, %esi
+	cmpl %esi, %edi
+	jae 3f
+	pushl $.Lbad_elf_string
+	call die
+3:
+
+	/* edx */
+	movl 28(%esp), %ecx
+	movl %ecx, -4(%esp)
+	/* elf size */
+	movl 24(%esp), %ecx
+	movl %ecx, -8(%esp)
+	/* elf base */
+	movl 20(%esp), %ecx
+	movl %ecx, -12(%esp)
+	/* program header */
+	movl %eax, -16(%esp)
+	subl $16, %esp
+
+	call map_section
+
+	addl 16, %esp
+	decl %ebx
+	jnz 2b
+
+	addl $16, %esp
 	popl %ebx
+	popl %edi
+	popl %esi
+	popl %ebp
+	ret
+
+map_section:
+	pushl %ebp
+	movl %esp, %ebp
+
+	nop
+
+	popl %ebp
+	ret
+
+setup_gdt:
+	pushl %ebp
+	movl %esp, %ebp
+
+	/* load the gdt so we can jump to long mode */
+	lgdtl (gdt_pointer)
+
+	/* select the correct segments */
+	movl $gdt_data, %eax
+	movw %ax, %ds
+	movw %ax, %es
+	movw %ax, %ss
+	movw %ax, %fs
+	movw %ax, %gs
+
+	popl %ebp
 	ret
 
 enter_long_mode:
+	pushl %ebp
+	movl %esp, %ebp
+
+	/*
+	 * To enter long mode we need to jump to a segment with LM=1
+	 * But, there is no instruction to preform an indirect jump,
+	 * so, we will use a return instead.
+	 */
+	pushl $gdt_code
+	pushl $long_mode_trampoline
+
+	/* _start(magic, multiboot); */
+	movl $LONG_MODE_MAGIC, %edi
+	movl multiboot_pointer, %esi
+	lret
+
+	popl %ebp
+	ret
+
+.set screen_buffer, 0xb8000
+.set screen_size, 80*25*2
+.set line_size, 80
+	/* void clear_screen(void); */
+clear_screen:
+	pushl %ebp
+	movl %esp, %ebp
+	pushl $screen_size
+	pushl $0
+	pushl $screen_buffer
+	call memset
+	addl $12, %esp
+	popl %ebp
+	ret
+
+	/* int puts(const char *s); */
+puts:
+	pushl %ebp
+	movl %esp, %ebp
+	movl 8(%ebp), %eax
+	pushl $0x07
+	pushl %eax
+	call cputs
+	addl $8, %esp
+	popl %ebp
+	ret
+
+	/* int die(const char *s); */
+die:
+	pushl %ebp
+	movl %esp, %ebp
+	movl 8(%ebp), %eax
+	pushl $0x4f
+	pushl %eax
+	call cputs
+	addl $8, %esp
+1:
+	cli
+	hlt
+	jmp 1b
+
+	/*
+	 * int cputs(const char *s, int color);
+	 *
+	 * The color argument is four bits (0xf0) for the background
+	 * and four bits (0x0f) for the foreground color.
+	 *
+	 * If the fourth bit of a color is set, it is "intensified."
+	 * Meaning it is brigher than the non-intense color.
+	 *
+	 * Colors (Intense):
+	 *  0	Black (Dark Gray)
+	 *  1	Blue (Light Blue)
+	 *  2	Green (Light Green)
+	 *  3	Cyan (Light Cyan)
+	 *  4	Red (Light Red)
+	 *  5	Magenta (Light Magenta)
+	 *  6	Brown (Yello)
+	 *  7   Light Gray (White)
+	 */
+cputs:
+	pushl %ebp
+	movl %esp, %ebp
+	pushl %edi
+	pushl %esi
+	pushl %ebx
+
+	/* set color */
+	movl 12(%ebp), %ecx
+	andl $0xff, %ecx
+	shll $8, %ecx
+
+	/* src pointer */
+	movl 8(%ebp), %esi
+
+	testl %esi, %esi
+	jz .Leof
+
+	/* normalize dest offset */
+	movl screen_pointer, %eax
+	xorl %edx, %edx
+	movl $screen_size, %ebx
+	divl %ebx
+	movl %edx, %edi
+1:
+	/* get a character */
+	movzb (%esi), %eax
+	incl %esi
+	testl %eax, %eax
+	jz .Leof
+
+	/* handle \r and \n */
+	cmpl $'\r, %eax
+	je .Llinefloor
+
+	cmpl $'\n, %eax
+	je .Llinefeed
+
+	/* write to screen */
+	orl %ecx, %eax
+	movw %ax, screen_buffer(, %edi, 2)
+	incl %edi
+
+	/* normalize dest offset */
+	cmpl $screen_size, %edi
+	jb 1b
+
+	pushl $(screen_size - line_size)
+	pushl $(screen_buffer + line_size)
+	pushl $(screen_buffer)
+	call memmove
+
+.Llinefloor:
+	/* skip back to beginning of line %edi -= %edi % line_size */
+	xorl %edx, %edx
+	movl %edi, %eax
+	movl $line_size, %ebx
+	divl %ebx
+	subl %edx, %edi
+	jmp 1b
+
+.Llinefeed:
+	/* move to next line */
+	addl $line_size, %edi
+	jmp .Llinefloor
+
+.Leof:
+	movl %edi, screen_pointer
+	xorl %eax, %eax
+	popl %ebx
+	popl %esi
+	popl %edi
+	popl %ebp
+	ret
+
+	/* void *memmove(void *dest, const void *src, size_t n); */
+memmove:
+	pushl %ebp
+	movl %esp, %ebp
+	pushl %esi
+	pushl %edi
+	pushl %ebx
+	movl 16(%ebp), %ecx
+	movl 12(%ebp), %esi
+	movl 8(%ebp), %edi
+	pushl %edi
+
+	testl %ecx, %ecx
+	jz .Lempty
+
+	movl %esi, %eax
+	subl %edi, %eax
+	cmpl %ecx, %eax
+	jbe .Lnon_overlapping
+
+	/* overlapping; we must go in reverse */
+.Loverlapping:
+
+	movl $3, %ebx
+	andl %edi, %ebx
+	jz 2f
+
+1:
+	decl %esi
+	decl %edi
+	movzb (%esi), %eax
+	movb %al, (%edi)
+	decl %ecx
+	jz .Lempty
+	decl %ebx
+	jnz 1b
+
+2:
+	movl $0x03, %ebx
+	notl %ebx
+
+	/* do words */
+3:
+	subl $4, %esi
+	subl $4, %edi
+	movl (%esi), %eax
+	movl %eax, (%edi)
+	subl $4, %ecx
+	jz .Lmemset_end
+	test %ebx, %ecx
+	jnz 3b
+
+	/* remainder */
+4:
+	decl %esi
+	decl %edi
+	movzb (%esi), %eax
+	movb %al, (%edi)
+	decl %ecx
+	jnz 4b
+
+	jmp .Lempty
+
+	/* non-overlapping; we can copy forward */
+.Lnon_overlapping:
+
+	movl $3, %ebx
+	andl %edi, %ebx
+	jz 2f
+
+1:
+	movzb (%esi), %eax
+	movb %al, (%edi)
+	incl %esi
+	incl %edi
+	decl %ecx
+	jz .Lempty
+	decl %ebx
+	jnz 1b
+
+2:
+	movl $0x03, %ebx
+	notl %ebx
+
+	/* do words */
+3:
+	movl (%esi), %eax
+	movl %eax, (%edi)
+	addl $4, %esi
+	addl $4, %edi
+	subl $4, %ecx
+	jz .Lmemset_end
+	test %ebx, %ecx
+	jnz 3b
+
+	/* remainder */
+4:
+	movzb (%esi), %eax
+	movb %al, (%edi)
+	incl %esi
+	incl %edi
+	decl %ecx
+	jnz 4b
+
+.Lempty:
+	popl %eax
+	popl %ebx
+	popl %edi
+	popl %esi
+	popl %ebp
+	ret
+
+	/* void *memset(void *s, int c, size_t n); */
+memset:
+	pushl %ebp
+	movl %esp, %ebp
+	pushl %edi
+	pushl %ebx
+	movl 16(%ebp), %ecx
+	movl 12(%ebp), %eax
+	movl 8(%ebp), %edi
+	pushl %edi
+	testl %ecx, %ecx
+	jz .Lmemset_end
+
+	/* %eax = %al:%al:%al:%al */
+	andl $0xff, %eax
+	movl %eax, %ebx
+	shll $8, %ebx
+	orl %ebx, %eax
+	movl %eax, %ebx
+	shll $16, %ebx
+	orl %ebx, %eax
+
+	/* align to words */
+	movl $3, %ebx
+	andl %edi, %ebx
+	jz 2f
+
+1:
+	movb %al, (%edi)
+	incl %edi
+	decl %ecx
+	jz .Lmemset_end
+	decl %ebx
+	jnz 1b
+
+2:
+	movl $0x03, %ebx
+	notl %ebx
+
+	/* do words */
+3:
+	movl %eax, (%edi)
+	addl $4, %edi
+	subl $4, %ecx
+	jz .Lmemset_end
+	test %ebx, %ecx
+	jnz 3b
+
+	/* remainder */
+4:
+	movb %al, (%edi)
+	incl %edi
+	decl %ecx
+	jnz 4b
+
+.Lmemset_end:
+	popl %eax
+	popl %ebx
+	popl %edi
+	popl %ebp
 	ret
 
 .code64
-_start64:
-	.align 4
-
-	/* we have just entered long mode. now: load the embedded elf */
-
+long_mode_trampoline:
 1:
 	hlt
 	jmp 1b
 
-.bss
-	.align 4096
-stack_bottom:
-	/* create an 8k stack (page aligned) */
-	.skip 8192
-stack_top:
-
-
-	/* Page table storage */
-pagetable:
-	.skip 8192
-pagetable_end:
-
 .data
-	.align 4
-
-	/* GDT */
-gdt:
-	.word	gdt_end - gdt
-	.long	gdt
-	.word	0
-	.quad	0x0000000000000000	/* NULL descriptor */
-	.quad	0x00af9a000000ffff	/* __KERNEL_CS */
-	.quad	0x00cf92000000ffff	/* __KERNEL_DS */
-	.quad	0x0080890000000000	/* TS descriptor */
-	.quad   0x0000000000000000	/* TS continued */
-gdt_end:
-
 	.align 4096
-_kernel_start:
-	/* include the kernel elf (page aligned) */
-	.incbin "kernel.strip"
-_kernel_end:
-
-	/* registers
-	long mode
-	compatability mode
-
-	aesni
-	general purpose registers
-	rip
-	flags register
-	gdtr
-	idtr
-	ldtr
-	tr
-	control registers
-	debug registers
-	test registers
-	segment registers
-	sse/avx
-	x87
-	amdv
-	vtx
-	*/
+elf_start:
+	.incbin "kernel.elf"
+elf_end:
 

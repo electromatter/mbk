@@ -2,7 +2,7 @@ CC=gcc
 LD=ld
 
 CFLAGS=-fPIE -pie -ffreestanding -nostdlib -g \
-	-Wall -Wextra -pedantic -Werror -std=c99
+	-Wall -Wextra -pedantic -Werror -std=c99 -static -no-pie
 MULTIBOOT_CFLAGS=-m32 -ffreestanding -nostdlib -Wall -Wextra -Wextra -pedantic
 
 OBJS=main.o start.o
@@ -21,7 +21,7 @@ default: multiboot.strip
 	chmod -x $@
 
 kernel.elf: $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) -static $(CFLAGS) -o $@ $^
 	chmod -x $@
 
 multiboot.elf: multiboot.S multiboot.ld kernel.strip
