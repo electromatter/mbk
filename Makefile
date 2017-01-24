@@ -1,36 +1,19 @@
 CC=gcc
 LD=ld
+MAKE=make
 
-CFLAGS=-fPIE -pie -ffreestanding -nostdlib -g \
-	-Wall -Wextra -pedantic -Werror -std=c99 -static -no-pie
-MULTIBOOT_CFLAGS=-m32 -ffreestanding -nostdlib -Wall -Wextra -Wextra -pedantic
+.PHONY: all
+all: loader
 
-OBJS=main.o start.o
+loader:
+	$(MAKE) -C loader
 
-.PHONY: default
-default: multiboot.strip
-
-%.o: %.c
-	$(CC) $(CFLAGS) -o $@ -c $<
-
-%.o: %.S
-	$(CC) $(CFLAGS) -o $@ -c $<
-
-%.strip: %.elf
-	strip -o $@ $<
-	chmod -x $@
-
-kernel.elf: $(OBJS)
-	$(CC) -static $(CFLAGS) -o $@ $^
-	chmod -x $@
-
-multiboot.elf: multiboot.S multiboot.ld kernel.strip
-	$(CC) $(MULTIBOOT_CFLAGS) -T multiboot.ld -o $@ $<
-	chmod -x $@
+kernel:
+	$(MAKE) -C kernel
 
 .PHONY: clean
 clean:
-	@rm -f *.elf
-	@rm -f *.strip
-	@rm -f *.o
+	find -name \*.elf -exec rm {} \;
+	find -name \*.sym -exec rm {} \;
+	find -name \*.o -exec rm {} \;
 

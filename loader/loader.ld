@@ -6,6 +6,8 @@ SECTIONS
 {
 	. = 1M;
 
+	loader_start = .;
+
 	.text :
 	{
 		*(.multiboot)
@@ -27,5 +29,7 @@ SECTIONS
 		*(COMMON)
 		*(.bss)
 	}
+
+	loader_size = . - loader_start;
 }
 
