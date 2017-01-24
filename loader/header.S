@@ -20,6 +20,8 @@ stack:
 	.align 16
 	.code32
 	.extern load_kernel
+	.extern elf_start
+	.extern elf_size
 	.globl _start
 	.type _start, @function
 
@@ -229,11 +231,4 @@ trampoline:
 	/* jump to the entry point */
 	jmp *%rax
 2:
-
-	.data
-	.align 4096
-
-elf_start:
-	.incbin "kernel.elf"
-	.set elf_size, . - elf_start
 

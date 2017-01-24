@@ -1,5 +1,7 @@
 *.o
+*.a
+*.sym
+*.so
 *.elf
-*.strip
-multiboot
 *.swp
+
